@@ -160,8 +160,8 @@ def sample_final_epsilon():
 
 def actorLearner(index, sess, q_network, target_network, saver, writer, summaries, lock, step_counter, num_actions, action_offset, env):
     # parameters to try when resuming
-    step_counter.set(2537322)
-    epsilon = 0.6
+    # step_counter.set(2537322)
+    # epsilon = 0.6
 
     # intialize starting state
     observation = env.reset()
@@ -184,7 +184,7 @@ def actorLearner(index, sess, q_network, target_network, saver, writer, summarie
         t_thread_counter += 1.0
         episode_t += 1.0
 
-        #env.render()
+        env.render()
 
         # anneal explorativeness
         epsilon -= (initial_epsilon - final_epsilon) / frames_anneal
