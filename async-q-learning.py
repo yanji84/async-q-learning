@@ -184,8 +184,6 @@ def actorLearner(index, sess, q_network, target_network, saver, writer, summarie
         t_thread_counter += 1.0
         episode_t += 1.0
 
-        env.render()
-
         # anneal explorativeness
         epsilon -= (initial_epsilon - final_epsilon) / frames_anneal
         epsilon = max(epsilon, final_epsilon)
@@ -316,8 +314,8 @@ def main():
     last_target_copy_time = 0
     while True:
         now = time.time()
-        #for env in envs:
-        #    env.render()
+        for env in envs:
+            env.render()
         if step_counter.get() % update_target_tsteps == 0:
             if now - last_target_copy_time > 10:
                 last_target_copy_time = now
