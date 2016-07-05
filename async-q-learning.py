@@ -29,6 +29,9 @@ reward_decay = 0.99
 # global thread counter
 max_thread_step = 5000000
 
+# learning rate
+initial_learning_rate = 0.0001
+
 class StepCounter(object):
     def __init__(self):
         self.step_counter = 0
@@ -46,7 +49,7 @@ class AgentQNetwork(object):
     def __init__(self, num_actions, network, prefix):
         with tf.name_scope(prefix):
             # input layer
-            self.s = tf.placeholder(tf.float32, [None, 84, 84, 4])
+            self.s = tf.placeholder(tf.float32, [None, 80, 80, 4])
 
             # layer parameters
             self.W_conv1 = self.weight_variable([8, 8, 4, 32])
@@ -58,23 +61,23 @@ class AgentQNetwork(object):
             self.W_conv3 = self.weight_variable([3, 3, 64, 64])
             self.b_conv3 = self.bias_variable([64])
 
-            self.W_fc1 = self.weight_variable([11*11*64, 512])
-            self.b_fc1 = self.bias_variable([512])
+            self.W_fc1 = self.weight_variable([1024, 256])
+            self.b_fc1 = self.bias_variable([256])
 
-            self.W_fc2 = self.weight_variable([512, num_actions])
+            self.W_fc2 = self.weight_variable([256, num_actions])
             self.b_fc2 = self.bias_variable([num_actions])
 
             # first conv-relu layer
-            h_conv1 = tf.nn.relu(self.conv2d(self.s, self.W_conv1, 4) + self.b_conv1)
+            h_conv1 = self.max_pool(tf.nn.relu(self.conv2d(self.s, self.W_conv1, 4) + self.b_conv1))
 
             # second conv-relu layer
-            h_conv2 = tf.nn.relu(self.conv2d(h_conv1, self.W_conv2, 2) + self.b_conv2)
+            h_conv2 = self.max_pool(tf.nn.relu(self.conv2d(h_conv1, self.W_conv2, 2) + self.b_conv2))
 
             # third conv-relu layer
-            self.h_conv3 = tf.nn.relu(self.conv2d(h_conv2, self.W_conv3, 1) + self.b_conv3)
+            h_conv3 = self.max_pool(tf.nn.relu(self.conv2d(h_conv2, self.W_conv3, 1) + self.b_conv3))
 
             # first fully connected layer
-            h_fc1 = tf.nn.relu(tf.matmul(tf.reshape(self.h_conv3, [-1, 11*11*64]), self.W_fc1) + self.b_fc1)
+            h_fc1 = tf.nn.relu(tf.matmul(tf.reshape(h_conv3, [-1, 1024]), self.W_fc1) + self.b_fc1)
 
             # last layer
             self.action_values = tf.matmul(h_fc1, self.W_fc2) + self.b_fc2
@@ -85,11 +88,12 @@ class AgentQNetwork(object):
             # this is the action index
             self.a = tf.placeholder(tf.float32, [None, num_actions])
 
+            zeroed = tf.mul(self.action_values, self.a)
             # compute loss
-            self.actual_reward = tf.reduce_sum(tf.mul(self.a, self.action_values), reduction_indices=1)
+            self.actual_reward = tf.reduce_sum(zeroed, reduction_indices=1)
             self.loss = tf.reduce_mean(tf.square(self.y - self.actual_reward))
             global_step = tf.Variable(0, name='global_step', trainable=False)
-            self.train = tf.train.RMSPropOptimizer(0.00025, 0.95, 0.95, 0.01).minimize(self.loss, global_step=global_step)
+            self.train = tf.train.AdamOptimizer(initial_learning_rate).minimize(self.loss, global_step=global_step)
 
             # summary ops only for q network
             if network == None:
@@ -118,6 +122,9 @@ class AgentQNetwork(object):
                 self.copy_ops.append(self.W_fc2.assign(network.W_fc2))
                 self.copy_ops.append(self.b_fc2.assign(network.b_fc2))
 
+    def max_pool(self, x):
+        return tf.nn.max_pool(x, ksize = [1, 2, 2, 1], strides = [1, 1, 1, 1], padding = "VALID")
+
     def weight_variable(self, shape):
         initial = tf.truncated_normal(shape, stddev = 0.01)
         return tf.Variable(initial)
@@ -127,10 +134,10 @@ class AgentQNetwork(object):
         return tf.Variable(initial)
 
     def conv2d(self, x, W, stride):
-        return tf.nn.conv2d(x, W, strides = [1, stride, stride, 1], padding = "SAME")
+        return tf.nn.conv2d(x, W, strides = [1, stride, stride, 1], padding = "VALID")
 
     def evaluate(self, sess, state):
-        return self.action_values.eval(session = sess, feed_dict = {self.s: np.expand_dims(state, axis=0)})
+        return self.action_values.eval(session = sess, feed_dict = {self.s: [state]})
 
     def learn(self, sess, action_list, state_list, target_reward_list, writer, summaries, timestep):
         sess.run(self.loss, feed_dict = {self.a: action_list,
@@ -147,7 +154,7 @@ class AgentQNetwork(object):
             print "Nice! target network inherited parameter correctly"
 
 def resize_input(obs):
-    return cv2.cvtColor(cv2.resize(obs, (84, 84)), cv2.COLOR_BGR2BGRA)
+    return cv2.cvtColor(cv2.resize(obs, (80, 80)), cv2.COLOR_BGR2GRAY)
 
 def sample_final_epsilon():
     """
@@ -160,11 +167,16 @@ def sample_final_epsilon():
 
 def actorLearner(index, sess, q_network, target_network, saver, writer, summaries, lock, step_counter, num_actions, action_offset, env):
     # parameters to try when resuming
-    # step_counter.set(2537322)
+    # step_counter.set(3007322)
     # epsilon = 0.6
+
+    epsilon = initial_epsilon
 
     # intialize starting state
     observation = env.reset()
+    resized_obs = resize_input(observation)
+    state = np.stack((resized_obs,resized_obs,resized_obs,resized_obs), axis = 2)
+
     state_list = []
     target_reward_list = []
     action_list = []
@@ -188,26 +200,25 @@ def actorLearner(index, sess, q_network, target_network, saver, writer, summarie
         epsilon -= (initial_epsilon - final_epsilon) / frames_anneal
         epsilon = max(epsilon, final_epsilon)
 
-        # resize image to 84 by 84
-        resized_obs = resize_input(observation)
-        state_list.append(resized_obs)
+        # save new observation to state ( a state consists of 4 consecutive observations )
+        state_list.append(state)
 
         # evaluate all action values at current state
-        action_values = q_network.evaluate(sess, resized_obs)
+        action_values = q_network.evaluate(sess, state)
 
-        action = 0
+        action = action_offset
         random_action = True
         if random.random() < epsilon:
-            action = random.randrange(num_actions)
+            action += random.randrange(num_actions)
         else:
             random_action = False
-            action = np.argmax(action_values)
+            action += np.argmax(action_values)
 
         action_index = np.zeros([num_actions])
-        action_index[action] = 1
+        action_index[action - action_offset] = 1
         action_list.append(action_index)
         
-        observation, reward, done, info = env.step(action + action_offset)
+        observation, reward, done, info = env.step(action)
         # clip reward
         reward = np.clip(reward, -1, 1)
         episode_score += reward
@@ -215,7 +226,8 @@ def actorLearner(index, sess, q_network, target_network, saver, writer, summarie
             target_reward_list.append(reward)
         else:
             # evaluate the loss with the target network
-            max_q = np.max(target_network.evaluate(sess, resize_input(observation)))
+            state = np.append(np.delete(state, 0, axis=2), np.reshape(resize_input(observation), (80,80,1)), axis=2)
+            max_q = np.max(target_network.evaluate(sess, state))
             episode_max_q_value += max_q
             target_reward_list.append(reward + reward_decay * max_q)
 
@@ -227,9 +239,10 @@ def actorLearner(index, sess, q_network, target_network, saver, writer, summarie
 
         if t_thread_counter % 500 == 0:
             if random_action:
-                print "thread #%d takes random action #%d" % (index, action)
+                print "thread #%d takes random action #%d\n" % (index, action)
             else:
-                print "thread #%d takes planned action #%d" % (index, action)
+                print "thread #%d takes planned action #%d\n" % (index, action)
+            print action_values
 
         # checkpoint
         if step_counter.get() % 500 == 0:
@@ -250,6 +263,7 @@ def actorLearner(index, sess, q_network, target_network, saver, writer, summarie
             episode_max_q_value = 0.0
             episode_index += 1
             observation = env.reset()
+    print "thread #%d has quit" % index
 def main(): 
     # initialize game environments
     envs = []
@@ -263,7 +277,7 @@ def main():
         # Gym currently specifies 6 actions for pong
         # and breakout when only 5 are needed. This
         # is a lame workaround.
-        num_actions = 5
+        num_actions = 3
         action_offset = 1
 
     # initialize lock
@@ -314,8 +328,8 @@ def main():
     last_target_copy_time = 0
     while True:
         now = time.time()
-        for env in envs:
-            env.render()
+        #for env in envs:
+        #    env.render()
         if step_counter.get() % update_target_tsteps == 0:
             if now - last_target_copy_time > 10:
                 last_target_copy_time = now
