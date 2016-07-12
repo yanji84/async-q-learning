@@ -274,9 +274,7 @@ def main():
     num_actions = envs[0].action_space.n
     action_offset = 0
     if (game == "Pong-v0" or game == "Breakout-v0"):
-        # Gym currently specifies 6 actions for pong
-        # and breakout when only 5 are needed. This
-        # is a lame workaround.
+        # Gym currently specifies 6 actions for pong and breakout when only 3 are needed
         num_actions = 3
         action_offset = 1
 
