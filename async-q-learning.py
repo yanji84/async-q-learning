@@ -27,7 +27,7 @@ update_target_tsteps = 10000
 reward_decay = 0.99
 
 # global thread counter
-max_thread_step = 5000000
+max_thread_step = 80000000
 
 # learning rate
 initial_learning_rate = 0.0001
