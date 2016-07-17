@@ -6,12 +6,17 @@ import numpy as np
 import random
 import gym
 import time
+from keras import backend as K
+from keras.layers import Convolution2D, Flatten, Dense, Input
+from keras.models import Model
+from skimage.transform import resize
+from skimage.color import rgb2gray
 
 # environment name
 game = "Pong-v0"
 
 # number of learning agents
-num_threads = 12
+num_threads = 1
 
 # agent explorativeness
 initial_epsilon = 1
@@ -45,116 +50,8 @@ class StepCounter(object):
     def set(self, num):
         self.step_counter = num
 
-class AgentQNetwork(object):
-    def __init__(self, num_actions, network, prefix):
-        with tf.name_scope(prefix):
-            # input layer
-            self.s = tf.placeholder(tf.float32, [None, 80, 80, 4])
-
-            # layer parameters
-            self.W_conv1 = self.weight_variable([8, 8, 4, 32])
-            self.b_conv1 = self.bias_variable([32])
-
-            self.W_conv2 = self.weight_variable([4, 4, 32, 64])
-            self.b_conv2 = self.bias_variable([64])
-
-            self.W_conv3 = self.weight_variable([3, 3, 64, 64])
-            self.b_conv3 = self.bias_variable([64])
-
-            self.W_fc1 = self.weight_variable([1024, 256])
-            self.b_fc1 = self.bias_variable([256])
-
-            self.W_fc2 = self.weight_variable([256, num_actions])
-            self.b_fc2 = self.bias_variable([num_actions])
-
-            # first conv-relu layer
-            h_conv1 = self.max_pool(tf.nn.relu(self.conv2d(self.s, self.W_conv1, 4) + self.b_conv1))
-
-            # second conv-relu layer
-            h_conv2 = self.max_pool(tf.nn.relu(self.conv2d(h_conv1, self.W_conv2, 2) + self.b_conv2))
-
-            # third conv-relu layer
-            h_conv3 = self.max_pool(tf.nn.relu(self.conv2d(h_conv2, self.W_conv3, 1) + self.b_conv3))
-
-            # first fully connected layer
-            h_fc1 = tf.nn.relu(tf.matmul(tf.reshape(h_conv3, [-1, 1024]), self.W_fc1) + self.b_fc1)
-
-            # last layer
-            self.action_values = tf.matmul(h_fc1, self.W_fc2) + self.b_fc2
-
-            # this is the target value
-            self.y = tf.placeholder(tf.float32, [None])
-
-            # this is the action index
-            self.a = tf.placeholder(tf.float32, [None, num_actions])
-
-            zeroed = tf.mul(self.action_values, self.a)
-            # compute loss
-            self.actual_reward = tf.reduce_sum(zeroed, reduction_indices=1)
-            self.loss = tf.reduce_mean(tf.square(self.y - self.actual_reward))
-            global_step = tf.Variable(0, name='global_step', trainable=False)
-            self.train = tf.train.AdamOptimizer(initial_learning_rate).minimize(self.loss, global_step=global_step)
-
-            # summary ops only for q network
-            if network == None:
-                # summary ops for tensorboard
-                episode_reward = tf.Variable(0.)
-                tf.scalar_summary("Episode Reward", episode_reward)
-                episode_ave_max_q = tf.Variable(0.)
-                tf.scalar_summary("Max Q Value", episode_ave_max_q)
-                logged_epsilon = tf.Variable(0.)
-                tf.scalar_summary("Epsilon", logged_epsilon)
-                summary_vars = [episode_reward, episode_ave_max_q, logged_epsilon]
-                self.summary_placeholders = [tf.placeholder("float") for i in range(len(summary_vars))]
-                self.summary_ops = [summary_vars[i].assign(self.summary_placeholders[i]) for i in range(len(summary_vars))]
-
-            # param assignment ops only for target network
-            if network != None:
-                self.copy_ops = []
-                self.copy_ops.append(self.W_conv1.assign(network.W_conv1))
-                self.copy_ops.append(self.b_conv1.assign(network.b_conv1))
-                self.copy_ops.append(self.W_conv2.assign(network.W_conv2))
-                self.copy_ops.append(self.b_conv2.assign(network.b_conv2))
-                self.copy_ops.append(self.W_conv3.assign(network.W_conv3))
-                self.copy_ops.append(self.b_conv3.assign(network.b_conv3))
-                self.copy_ops.append(self.W_fc1.assign(network.W_fc1))
-                self.copy_ops.append(self.b_fc1.assign(network.b_fc1))
-                self.copy_ops.append(self.W_fc2.assign(network.W_fc2))
-                self.copy_ops.append(self.b_fc2.assign(network.b_fc2))
-
-    def max_pool(self, x):
-        return tf.nn.max_pool(x, ksize = [1, 2, 2, 1], strides = [1, 1, 1, 1], padding = "VALID")
-
-    def weight_variable(self, shape):
-        initial = tf.truncated_normal(shape, stddev = 0.01)
-        return tf.Variable(initial)
-
-    def bias_variable(self, shape):
-        initial = tf.constant(0.01, shape = shape)
-        return tf.Variable(initial)
-
-    def conv2d(self, x, W, stride):
-        return tf.nn.conv2d(x, W, strides = [1, stride, stride, 1], padding = "VALID")
-
-    def evaluate(self, sess, state):
-        return self.action_values.eval(session = sess, feed_dict = {self.s: [state]})
-
-    def learn(self, sess, action_list, state_list, target_reward_list, writer, summaries, timestep):
-        sess.run(self.loss, feed_dict = {self.a: action_list,
-                                         self.s: state_list,
-                                         self.y: target_reward_list})
-
-    def copy(self, sess, network):
-        sess.run(self.copy_ops)
-
-        # making sure the weight assignment has taken effect
-        q_w_fc1 = self.W_fc1.eval(session = sess)
-        t_w_fc1 = network.W_fc1.eval(session = sess)
-        if np.array_equal(q_w_fc1, t_w_fc1):
-            print "Nice! target network inherited parameter correctly"
-
 def resize_input(obs):
-    return cv2.cvtColor(cv2.resize(obs, (80, 80)), cv2.COLOR_BGR2GRAY)
+    return resize(rgb2gray(obs), (84, 84))
 
 def sample_final_epsilon():
     """
@@ -165,18 +62,27 @@ def sample_final_epsilon():
     probabilities = np.array([0.4,0.3,0.3])
     return np.random.choice(final_epsilons, 1, p=list(probabilities))[0]
 
-def actorLearner(index, sess, q_network, target_network, saver, writer, summaries, lock, step_counter, num_actions, action_offset, env):
+def actorLearner(index, sess, graph_ops, saver, writer, summary_ops, step_counter, num_actions, action_offset, env):
     # parameters to try when resuming
     # step_counter.set(3007322)
     # epsilon = 0.6
+
+    # Unpack graph ops
+    s = graph_ops["s"]
+    q_values = graph_ops["q_values"]
+    st = graph_ops["st"]
+    target_q_values = graph_ops["target_q_values"]
+    a = graph_ops["a"]
+    y = graph_ops["y"]
+    grad_update = graph_ops["grad_update"]
+    summary_placeholders, update_ops, summary_op = summary_ops
 
     epsilon = initial_epsilon
 
     # intialize starting state
     observation = env.reset()
     resized_obs = resize_input(observation)
-    state = np.stack((resized_obs,resized_obs,resized_obs,resized_obs), axis = 2)
-
+    state = np.stack((resized_obs,resized_obs,resized_obs,resized_obs))
     state_list = []
     target_reward_list = []
     action_list = []
@@ -187,7 +93,6 @@ def actorLearner(index, sess, q_network, target_network, saver, writer, summarie
     episode_index = 0
 
     final_epsilon = sample_final_epsilon()
-
     print "starting agent#%d, with final epsilon %0.4f" % (index, final_epsilon)
     time.sleep(3*index)
 
@@ -204,8 +109,8 @@ def actorLearner(index, sess, q_network, target_network, saver, writer, summarie
         state_list.append(state)
 
         # evaluate all action values at current state
-        action_values = q_network.evaluate(sess, state)
-
+        action_values = q_values.eval(session = sess, feed_dict = {s : [state]})
+        
         action = action_offset
         random_action = True
         if random.random() < epsilon:
@@ -226,36 +131,35 @@ def actorLearner(index, sess, q_network, target_network, saver, writer, summarie
             target_reward_list.append(reward)
         else:
             # evaluate the loss with the target network
-            state = np.append(np.delete(state, 0, axis=2), np.reshape(resize_input(observation), (80,80,1)), axis=2)
-            max_q = np.max(target_network.evaluate(sess, state))
+            state = np.append(np.delete(state, 0, axis=0), np.expand_dims(resize_input(observation), axis=0), axis = 0)
+            max_q = np.max(target_q_values.eval(session = sess, feed_dict = {st : [state]}))
             episode_max_q_value += max_q
             target_reward_list.append(reward + reward_decay * max_q)
 
         if done or (t_thread_counter % model_update_tsteps == 0):
-            q_network.learn(sess, action_list, state_list, target_reward_list, writer, summaries, step_counter.get())
+            sess.run(grad_update, feed_dict = {y : target_reward_list,
+                                                  a : action_list,
+                                                  s : state_list})
             state_list = []
             target_reward_list = []
             action_list = []
-
-        if t_thread_counter % 500 == 0:
-            if random_action:
-                print "thread #%d takes random action #%d\n" % (index, action)
-            else:
-                print "thread #%d takes planned action #%d\n" % (index, action)
-            print action_values
 
         # checkpoint
         if step_counter.get() % 500 == 0:
             saver.save(sess, "/tmp/qmodel/saved_network")
 
+        if step_counter.get() % 300 == 0:
+            print action_values
+
         if done:
             avg_max_q = episode_max_q_value / episode_t
-            sess.run(q_network.summary_ops[0], feed_dict = {q_network.summary_placeholders[0]:float(episode_score)})
-            sess.run(q_network.summary_ops[1], feed_dict = {q_network.summary_placeholders[1]:float(avg_max_q)})
-            sess.run(q_network.summary_ops[2], feed_dict = {q_network.summary_placeholders[2]:float(epsilon)})
-            # write summaries
-            result = sess.run(summaries)
-            writer.add_summary(result, step_counter.get())
+            
+            stats = [episode_score, avg_max_q, epsilon]
+            for i in range(len(stats)):
+                sess.run(update_ops[i], feed_dict={summary_placeholders[i]:float(stats[i])})
+
+            summary_str = sess.run(summary_op)
+            writer.add_summary(summary_str, step_counter.get())
 
             print "thread #%d\nepisode #%d\nepisode steps: #%d\nepisode score: %d\naverage max q:%s\ntimestep: %d\nthread timestep: %d\nepsilon: %s\n" % (index, episode_index, episode_t, episode_score, str(avg_max_q), step_counter.get(), t_thread_counter, str(epsilon))
             episode_t = 0.0
@@ -264,6 +168,67 @@ def actorLearner(index, sess, q_network, target_network, saver, writer, summarie
             episode_index += 1
             observation = env.reset()
     print "thread #%d has quit" % index
+
+def build_network(num_actions, agent_history_length, resized_width, resized_height):
+  with tf.device("/cpu:0"):
+    state = tf.placeholder("float", [None, agent_history_length, resized_width, resized_height])
+    inputs = Input(shape=(agent_history_length, resized_width, resized_height))
+    model = Convolution2D(nb_filter=16, nb_row=8, nb_col=8, subsample=(4,4), activation='relu', border_mode='same')(inputs)
+    model = Convolution2D(nb_filter=32, nb_row=4, nb_col=4, subsample=(2,2), activation='relu', border_mode='same')(model)
+    model = Flatten()(model)
+    model = Dense(output_dim=256, activation='relu')(model)
+    q_values = Dense(output_dim=num_actions, activation='linear')(model)
+    m = Model(input=inputs, output=q_values)
+  return state, m
+
+def build_graph(num_actions):
+    # Create shared deep q network
+    s, q_network = build_network(num_actions=num_actions, agent_history_length=4, resized_width=84, resized_height=84)
+    network_params = q_network.trainable_weights
+    q_values = q_network(s)
+
+    # Create shared target network
+    st, target_q_network = build_network(num_actions=num_actions, agent_history_length=4, resized_width=84, resized_height=84)
+    target_network_params = target_q_network.trainable_weights
+    target_q_values = target_q_network(st)
+
+    # Op for periodically updating target network with online network weights
+    reset_target_network_params = [target_network_params[i].assign(network_params[i]) for i in range(len(target_network_params))]
+    
+    # Define cost and gradient update op
+    a = tf.placeholder("float", [None, num_actions])
+    y = tf.placeholder("float", [None])
+    action_q_values = tf.reduce_sum(tf.mul(q_values, a), reduction_indices=1)
+    cost = tf.reduce_mean(tf.square(y - action_q_values))
+    optimizer = tf.train.AdamOptimizer(initial_learning_rate)
+    grad_update = optimizer.minimize(cost, var_list=network_params)
+
+    graph_ops = {"s" : s, 
+                 "q_values" : q_values,
+                 "st" : st, 
+                 "target_q_values" : target_q_values,
+                 "reset_target_network_params" : reset_target_network_params,
+                 "a" : a,
+                 "y" : y,
+                 "grad_update" : grad_update}
+
+    return graph_ops
+
+# Set up some episode summary ops to visualize on tensorboard.
+def setup_summaries():
+    episode_reward = tf.Variable(0.)
+    tf.scalar_summary("Episode Reward", episode_reward)
+    episode_ave_max_q = tf.Variable(0.)
+    tf.scalar_summary("Max Q Value", episode_ave_max_q)
+    logged_epsilon = tf.Variable(0.)
+    tf.scalar_summary("Epsilon", logged_epsilon)
+    logged_T = tf.Variable(0.)
+    summary_vars = [episode_reward, episode_ave_max_q, logged_epsilon]
+    summary_placeholders = [tf.placeholder("float") for i in range(len(summary_vars))]
+    update_ops = [summary_vars[i].assign(summary_placeholders[i]) for i in range(len(summary_vars))]
+    summary_op = tf.merge_all_summaries()
+    return summary_placeholders, update_ops, summary_op
+
 def main(): 
     # initialize game environments
     envs = []
@@ -278,9 +243,6 @@ def main():
         num_actions = 3
         action_offset = 1
 
-    # initialize lock
-    lock = threading.Lock()
-
     # intialize global step counter
     step_counter = StepCounter()
 
@@ -288,15 +250,14 @@ def main():
     sess = tf.InteractiveSession()
     #sess = tf.InteractiveSession(config=tf.ConfigProto(log_device_placement=True))
 
-    # initialize agent network
-    q_network = AgentQNetwork(num_actions, None, 'q')
+    # build computational graph
+    graph_ops = build_graph(num_actions)
+    reset_target = graph_ops["reset_target_network_params"]
 
-    # merge all the summaries and write them out to local path
-    summaries = tf.merge_all_summaries()
+    # setup summaries
+    summary_ops = setup_summaries()
+    summary_op = summary_ops[-1]
     writer = tf.train.SummaryWriter("/tmp/tensorboard_logs", sess.graph)
-
-    # initialize target network
-    target_network = AgentQNetwork(num_actions, q_network, 't')
 
     # initalize tensorflow variables
     sess.run(tf.initialize_all_variables())
@@ -310,13 +271,12 @@ def main():
         saver.restore(sess, checkpoint.model_checkpoint_path)
         print "successfully loaded checkpoint"
 
-    # initial sync of target network parameters
-    target_network.copy(sess, q_network)
+    sess.run(reset_target)
 
     # spawn agent threads
     threads = list()
     for i in range(num_threads):
-        t = threading.Thread(target=actorLearner, args=(i, sess, q_network, target_network, saver, writer, summaries, lock, step_counter, num_actions, action_offset, envs[i]))
+        t = threading.Thread(target=actorLearner, args=(i, sess, graph_ops, saver, writer, summary_ops, step_counter, num_actions, action_offset, envs[i]))
         threads.append(t)
 
     # Start all threads
@@ -328,11 +288,12 @@ def main():
         now = time.time()
         #for env in envs:
         #    env.render()
+
         if step_counter.get() % update_target_tsteps == 0:
             if now - last_target_copy_time > 10:
                 last_target_copy_time = now
                 print "step#%d updating target network" % (step_counter.get())
-                target_network.copy(sess, q_network)
+                sess.run(reset_target)
 
 
     # Wait for all of them to finish
