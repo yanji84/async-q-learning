@@ -16,7 +16,7 @@ from skimage.color import rgb2gray
 game = "Pong-v0"
 
 # number of learning agents
-num_threads = 1
+num_threads = 12
 
 # agent explorativeness
 initial_epsilon = 1
